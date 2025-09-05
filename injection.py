@@ -28,7 +28,7 @@ args = parser.parse_args()
 # ---------------------------
 # Dataset
 # ---------------------------
-ds = load_dataset("allenai/wildjailbreak", delimiter="\t", keep_default_na=False)['train']
+ds = load_dataset("allenai/wildjailbreak", "train" ,delimiter="\t", keep_default_na=False)
 
 def simplify(example):
     if example["data_type"] in ["vanilla_harmful", "adversarial_harmful"]:
