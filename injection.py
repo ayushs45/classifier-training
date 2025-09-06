@@ -123,9 +123,10 @@ eval_ds = eval_ds.remove_columns([c for c in eval_ds.column_names if c not in ke
 # ---------------------------
 training_args = TrainingArguments(
     output_dir="./results",
-    eval_strategy="steps",
+    evaluation_strategy="steps",
     eval_steps=1000,
     save_strategy="steps",
+    save_steps=1000,                # 👈 add this
     learning_rate=2e-5,
     per_device_train_batch_size=4,
     per_device_eval_batch_size=6,
@@ -140,6 +141,7 @@ training_args = TrainingArguments(
     fp16=True,
     dataloader_num_workers=4,
 )
+
 
 trainer = Trainer(
     model=model,
