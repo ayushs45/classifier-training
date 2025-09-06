@@ -123,7 +123,7 @@ eval_ds = eval_ds.remove_columns([c for c in eval_ds.column_names if c not in ke
 # ---------------------------
 training_args = TrainingArguments(
     output_dir="./results",
-    evaluation_strategy="steps",
+    eval_strategy="steps",
     eval_steps=1000,
     save_strategy="steps",
     save_steps=1000,                # 👈 add this
