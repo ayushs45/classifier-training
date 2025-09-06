@@ -123,7 +123,8 @@ eval_ds = eval_ds.remove_columns([c for c in eval_ds.column_names if c not in ke
 # ---------------------------
 training_args = TrainingArguments(
     output_dir="./results",
-    evaluation_strategy="epoch",
+    eval_strategy="steps",
+    eval_steps=1000,
     save_strategy="epoch",
     learning_rate=2e-5,
     per_device_train_batch_size=4,
