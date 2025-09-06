@@ -97,7 +97,8 @@ if args.use_lora:
         r=16,
         lora_alpha=16,
         lora_dropout=0.1,
-        bias="none"
+        bias="none",
+        target_modules=["query", "value", "dense"]
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
