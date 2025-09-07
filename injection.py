@@ -1,7 +1,6 @@
 import argparse
 import numpy as np
 from datasets import load_dataset
-from huggingface_hub import login
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
@@ -21,14 +20,9 @@ parser.add_argument("--use_8bit", action="store_true", help="Enable 8-bit quanti
 args = parser.parse_args()
 
 # ---------------------------
-# HF Login
-# ---------------------------
-# login("")
-
-# ---------------------------
 # Dataset
 # ---------------------------
-ds = load_dataset("allenai/wildjailbreak", "train" ,delimiter="\t", keep_default_na=False)['train']
+ds = load_dataset("allenai/wildjailbreak", "train", delimiter="\t", keep_default_na=False)['train']
 
 def simplify(example):
     if example["data_type"] in ["vanilla_harmful", "adversarial_harmful"]:
@@ -39,6 +33,9 @@ def simplify(example):
 
 ds = ds.map(simplify)
 ds = ds.map(lambda ex: {"text": ex["vanilla"], "label": 1 if "harmful" in ex["data_type"] else 0})
+
+# 👇 take only random 20k samples for training
+ds = ds.shuffle(seed=42).select(range(20000))
 
 dataset = ds.train_test_split(test_size=0.1, seed=42)
 train_ds, val_ds = dataset["train"], dataset["test"]
@@ -108,6 +105,7 @@ id2label = {0: "benign", 1: "harmful"}
 label2id = {"benign": 0, "harmful": 1}
 model.config.id2label = id2label
 model.config.label2id = label2id
+
 # ---------------------------
 # Metrics
 # ---------------------------
@@ -129,9 +127,9 @@ eval_ds = eval_ds.remove_columns([c for c in eval_ds.column_names if c not in ke
 training_args = TrainingArguments(
     output_dir="./results",
     eval_strategy="steps",
-    eval_steps=1000,
+    eval_steps=2500,        # 👈 evaluate every 2.5k steps
     save_strategy="steps",
-    save_steps=1000,                # 👈 add this
+    save_steps=2500,        # 👈 save every 2.5k steps
     learning_rate=2e-5,
     per_device_train_batch_size=4,
     per_device_eval_batch_size=6,
@@ -145,9 +143,8 @@ training_args = TrainingArguments(
     remove_unused_columns=False,
     fp16=True,
     dataloader_num_workers=4,
-    label_names=["labels"],   # 👈 fixes the warning
+    label_names=["labels"],
 )
-
 
 trainer = Trainer(
     model=model,
