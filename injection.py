@@ -1,22 +1,29 @@
 import argparse
 import numpy as np
+import matplotlib.pyplot as plt
 from datasets import load_dataset
 from transformers import (
     AutoTokenizer,
     AutoModelForSequenceClassification,
     Trainer,
     TrainingArguments,
-    BitsAndBytesConfig,
 )
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
-from peft import LoraConfig, get_peft_model, TaskType
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, ConfusionMatrixDisplay
 
 # ---------------------------
 # CLI args
 # ---------------------------
 parser = argparse.ArgumentParser()
-parser.add_argument("--use_lora", action="store_true", help="Enable LoRA fine-tuning")
-parser.add_argument("--use_8bit", action="store_true", help="Enable 8-bit quantization")
+parser.add_argument("--model_name", type=str, default="answerdotai/ModernBERT-large", help="Model to use")
+parser.add_argument("--train_batch_size", type=int, default=12, help="Training batch size")
+parser.add_argument("--eval_batch_size", type=int, default=12, help="Evaluation batch size")
+parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
+parser.add_argument("--num_epochs", type=int, default=10, help="Number of training epochs")
+parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay")
+parser.add_argument("--eval_strategy", type=str, default="epoch", help="Evaluation strategy (steps/epoch)")
+parser.add_argument("--eval_steps", type=int, default=2500, help="Steps between evaluations if strategy=steps")
+parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Warmup ratio")
+parser.add_argument("--lr_scheduler_type", type=str, default="cosine", help="Learning rate scheduler type")
 args = parser.parse_args()
 
 # ---------------------------
@@ -25,18 +32,14 @@ args = parser.parse_args()
 ds = load_dataset("allenai/wildjailbreak", "train", delimiter="\t", keep_default_na=False)['train']
 
 def simplify(example):
-    if example["data_type"] in ["vanilla_harmful", "adversarial_harmful"]:
-        example["data_type"] = "harmful"
-    else:
-        example["data_type"] = "benign"
+    example["data_type"] = "harmful" if example["data_type"] in ["vanilla_harmful", "adversarial_harmful"] else "benign"
     return example
 
 ds = ds.map(simplify)
-ds = ds.map(lambda ex: {"text": ex["vanilla"], "label": 1 if "harmful" in ex["data_type"] else 0})
+ds = ds.map(lambda ex: {"text": ex["vanilla"], "label": 1 if ex["data_type"] == "harmful" else 0})
 
-# 👇 take only random 20k samples for training
+# Take random 40k samples
 ds = ds.shuffle(seed=42).select(range(40000))
-
 dataset = ds.train_test_split(test_size=0.1, seed=42)
 train_ds, val_ds = dataset["train"], dataset["test"]
 
@@ -47,16 +50,10 @@ eval_ds = eval_ds.map(lambda ex: {"label": label_map[ex["label"]]})
 # ---------------------------
 # Tokenizer
 # ---------------------------
-model_name = "answerdotai/ModernBERT-large"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
 def preprocess(examples):
-    return tokenizer(
-        examples["text"],
-        truncation=True,
-        padding="max_length",
-        max_length=512,
-    )
+    return tokenizer(examples["text"], truncation=True, padding="max_length", max_length=512)
 
 train_ds = train_ds.map(preprocess, batched=True)
 val_ds = val_ds.map(preprocess, batched=True)
@@ -71,52 +68,35 @@ val_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"
 eval_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
 # ---------------------------
-# Model + LoRA + 8-bit
+# Model
 # ---------------------------
-if args.use_8bit:
-    quant_config = BitsAndBytesConfig(
-        load_in_8bit=True,
-        llm_int8_threshold=6.0,
-        llm_int8_has_fp16_weight=False,
-    )
-    model = AutoModelForSequenceClassification.from_pretrained(
-        model_name,
-        num_labels=2,
-        quantization_config=quant_config,
-        device_map="auto",
-    )
-else:
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2)
 
-if args.use_lora:
-    lora_config = LoraConfig(
-        task_type=TaskType.SEQ_CLS,
-        r=32,
-        lora_alpha=16,
-        lora_dropout=0.1,
-        bias="none",
-        target_modules=["Wi", "Wo", "dense","Wqkv","classifier"],
-        modules_to_save=None,
-    )
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
-
-# attach label metadata
+# Attach label metadata
 id2label = {0: "benign", 1: "harmful"}
 label2id = {"benign": 0, "harmful": 1}
 model.config.id2label = id2label
 model.config.label2id = label2id
 
 # ---------------------------
-# Metrics
+# Metrics with confusion matrix
 # ---------------------------
 def compute_metrics(pred):
     labels = pred.label_ids
     preds = np.argmax(pred.predictions, axis=1)
+
     acc = accuracy_score(labels, preds)
     prec, rec, f1, _ = precision_recall_fscore_support(labels, preds, average="binary")
+
+    cm = confusion_matrix(labels, preds)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["benign", "harmful"])
+    disp.plot(cmap=plt.cm.Blues)
+    plt.title("Confusion Matrix")
+    plt.show()
+
     return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
+# Remove unused columns
 keep_cols = ["input_ids", "attention_mask", "labels"]
 train_ds = train_ds.remove_columns([c for c in train_ds.column_names if c not in keep_cols])
 val_ds = val_ds.remove_columns([c for c in val_ds.column_names if c not in keep_cols])
@@ -127,14 +107,14 @@ eval_ds = eval_ds.remove_columns([c for c in eval_ds.column_names if c not in ke
 # ---------------------------
 training_args = TrainingArguments(
     output_dir="./results",
-    eval_strategy="steps",
-    eval_steps=500,        # 👈 evaluate every 2.5k steps
+    eval_strategy=args.eval_strategy,
+    eval_steps=args.eval_steps,
     save_strategy="epoch",
-    learning_rate=2e-5,
-    per_device_train_batch_size=12,
-    per_device_eval_batch_size=12,
-    num_train_epochs=2,
-    weight_decay=0.01,
+    learning_rate=args.learning_rate,
+    per_device_train_batch_size=args.train_batch_size,
+    per_device_eval_batch_size=args.eval_batch_size,
+    num_train_epochs=args.num_epochs,
+    weight_decay=args.weight_decay,
     logging_dir="./logs",
     metric_for_best_model="f1",
     greater_is_better=True,
@@ -142,6 +122,8 @@ training_args = TrainingArguments(
     remove_unused_columns=False,
     fp16=True,
     dataloader_num_workers=4,
+    warmup_ratio=args.warmup_ratio,
+    lr_scheduler_type=args.lr_scheduler_type,
     label_names=["labels"],
 )
 
@@ -150,7 +132,6 @@ trainer = Trainer(
     args=training_args,
     train_dataset=train_ds,
     eval_dataset=val_ds,
-    processing_class=tokenizer,
     compute_metrics=compute_metrics,
 )
 
