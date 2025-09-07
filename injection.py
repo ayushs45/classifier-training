@@ -15,8 +15,7 @@ from peft import LoraConfig, get_peft_model, TaskType
 # CLI args
 # ---------------------------
 parser = argparse.ArgumentParser()
-parser.add_argument("--use_lora", action="store_true", help="Enable LoRA fine-tuning")
-parser.add_argument("--use_8bit", action="store_true", help="Enable 8-bit quantization")
+parser.add_argument("--use_lora_8bit", action="store_true", help="Enable LoRA fine-tuning")
 args = parser.parse_args()
 
 # ---------------------------
@@ -73,22 +72,15 @@ eval_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels
 # ---------------------------
 # Model + LoRA + 8-bit
 # ---------------------------
-if args.use_8bit:
-    quant_config = BitsAndBytesConfig(
-        load_in_8bit=True,
-        llm_int8_threshold=6.0,
-        llm_int8_has_fp16_weight=False,
-    )
+lora_config = None
+if args.use_lora_8bit:
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
+        load_in_8bit=True,
         num_labels=2,
-        quantization_config=quant_config,
         device_map="auto",
     )
-else:
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
 
-if args.use_lora:
     lora_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,
         r=32,
@@ -96,10 +88,10 @@ if args.use_lora:
         lora_dropout=0.1,
         bias="none",
         target_modules=["Wi", "Wo", "dense","Wqkv","classifier"],
-        modules_to_save=[],
     )
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+
+else:
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
 
 # attach label metadata
 id2label = {0: "benign", 1: "harmful"}
@@ -152,6 +144,7 @@ trainer = Trainer(
     eval_dataset=val_ds,
     processing_class=tokenizer,
     compute_metrics=compute_metrics,
+    peft_config=lora_config
 )
 
 trainer.train()
