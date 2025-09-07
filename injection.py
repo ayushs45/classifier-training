@@ -35,7 +35,7 @@ ds = ds.map(simplify)
 ds = ds.map(lambda ex: {"text": ex["vanilla"], "label": 1 if "harmful" in ex["data_type"] else 0})
 
 # 👇 take only random 20k samples for training
-ds = ds.shuffle(seed=42).select(range(20000))
+ds = ds.shuffle(seed=42).select(range(40000))
 
 dataset = ds.train_test_split(test_size=0.1, seed=42)
 train_ds, val_ds = dataset["train"], dataset["test"]
