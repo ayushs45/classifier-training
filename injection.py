@@ -91,11 +91,12 @@ else:
 if args.use_lora:
     lora_config = LoraConfig(
         task_type=TaskType.SEQ_CLS,
-        r=64,
+        r=32,
         lora_alpha=16,
         lora_dropout=0.1,
         bias="none",
-        target_modules=["Wi", "Wo", "dense","Wqkv","classifier"]
+        target_modules=["Wi", "Wo", "dense","Wqkv","classifier"],
+        modules_to_save=None,
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
