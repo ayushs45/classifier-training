@@ -95,7 +95,7 @@ if args.use_lora:
         lora_alpha=16,
         lora_dropout=0.1,
         bias="none",
-        target_modules=["query", "value", "dense"]
+        target_modules=["Wi", "Wo", "dense","Wqkv","classifier"]
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
