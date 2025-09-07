@@ -103,6 +103,11 @@ if args.use_lora:
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
+# attach label metadata
+id2label = {0: "benign", 1: "harmful"}
+label2id = {"benign": 0, "harmful": 1}
+model.config.id2label = id2label
+model.config.label2id = label2id
 # ---------------------------
 # Metrics
 # ---------------------------
@@ -140,6 +145,7 @@ training_args = TrainingArguments(
     remove_unused_columns=False,
     fp16=True,
     dataloader_num_workers=4,
+    label_names=["labels"],   # 👈 fixes the warning
 )
 
 
