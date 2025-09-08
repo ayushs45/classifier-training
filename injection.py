@@ -109,7 +109,7 @@ training_args = TrainingArguments(
     output_dir="./results",
     eval_strategy=args.eval_strategy,
     eval_steps=args.eval_steps,
-    save_strategy="epoch",
+    save_strategy="no",   # <-- no checkpoints
     learning_rate=args.learning_rate,
     per_device_train_batch_size=args.train_batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
@@ -138,3 +138,6 @@ trainer = Trainer(
 trainer.train()
 results = trainer.evaluate(eval_dataset=eval_ds)
 print("Evaluation on Ayush-Singh/qualifire:", results)
+
+# Save final model only at the end
+trainer.save_model("./final_model")
