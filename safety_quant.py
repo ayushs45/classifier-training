@@ -71,13 +71,20 @@ print("Train size:", len(train_ds))
 print("Validation size:", len(val_ds))
 
 # ---------------------------
-# Tokenizer
+# Tokenizer with padding token fix
 # ---------------------------
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
-# Add pad token if it doesn't exist
+# Fix for models without padding token (like Qwen, Llama, etc.)
 if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
+    # Try to use eos_token as pad_token
+    if tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+        print(f"Set pad_token to eos_token: {tokenizer.pad_token}")
+    else:
+        # Fallback: add a new pad token
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        print("Added new pad_token: [PAD]")
 
 def preprocess(examples):
     return tokenizer(
@@ -108,6 +115,15 @@ model = AutoModelForSequenceClassification.from_pretrained(
 
 model.config.id2label = {0:"no", 1:"yes"}
 model.config.label2id = {"no":0, "yes":1}
+
+# Resize token embeddings if we added a new pad token
+if tokenizer.pad_token == '[PAD]':
+    model.resize_token_embeddings(len(tokenizer))
+    print(f"Resized token embeddings to {len(tokenizer)} tokens")
+
+# Set pad_token_id in model config to match tokenizer
+model.config.pad_token_id = tokenizer.pad_token_id
+print(f"Set model pad_token_id to: {model.config.pad_token_id}")
 
 # Prepare model for k-bit training
 model = prepare_model_for_kbit_training(model)
@@ -196,6 +212,8 @@ trainer = Trainer(
 # Train & Evaluate
 # ---------------------------
 print("Starting 4-bit quantized training...")
+print(f"Tokenizer pad_token: {tokenizer.pad_token} (id: {tokenizer.pad_token_id})")
+print(f"Model pad_token_id: {model.config.pad_token_id}")
 print(f"GPU Memory before training: {torch.cuda.memory_allocated() / 1024**3:.2f} GB")
 
 trainer.train()
