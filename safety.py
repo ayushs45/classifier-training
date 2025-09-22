@@ -137,4 +137,8 @@ results = trainer.evaluate()
 print(f"Evaluation results on {args.dataset_name} validation set:")
 print(results)
 
-trainer.save_model(f"./final_model_{args.dataset_name}")
+output_dir = f"./final_model_{args.dataset_name}"
+trainer.save_model(output_dir)
+tokenizer.save_pretrained(output_dir)
+
+print(f"Model and tokenizer saved to {output_dir}")
