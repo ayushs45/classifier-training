@@ -137,7 +137,7 @@ lora_config = LoraConfig(
     r=args.lora_r,
     lora_alpha=args.lora_alpha,
     lora_dropout=args.lora_dropout,
-    target_modules=["query", "value", "key", "dense"],  # Common attention modules
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj","gate_proj","up_proj","down_proj","score"],  # Common attention modules
     bias="none",
 )
 
