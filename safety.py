@@ -49,9 +49,20 @@ print("Train size:", len(train_ds))
 print("Validation size:", len(val_ds))
 
 # ---------------------------
-# Tokenizer
+# Tokenizer with padding token fix
 # ---------------------------
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+
+# Fix for models without padding token (like Qwen, Llama, etc.)
+if tokenizer.pad_token is None:
+    # Try to use eos_token as pad_token
+    if tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+        print(f"Set pad_token to eos_token: {tokenizer.pad_token}")
+    else:
+        # Fallback: add a new pad token
+        tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+        print("Added new pad_token: [PAD]")
 
 def preprocess(examples):
     return tokenizer(
@@ -69,15 +80,22 @@ train_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "label
 val_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
 # ---------------------------
-# Model
+# Model with token embedding resize
 # ---------------------------
 model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2)
+
+# Resize token embeddings if we added a new pad token
+if tokenizer.pad_token == '[PAD]':
+    model.resize_token_embeddings(len(tokenizer))
+    print(f"Resized token embeddings to {len(tokenizer)} tokens")
+
 model.config.id2label = {0:"no", 1:"yes"}
 model.config.label2id = {"no":0, "yes":1}
 
-# ---------------------------
-# Metrics with confusion matrix
-# ---------------------------
+# Set pad_token_id in model config to match tokenizer
+model.config.pad_token_id = tokenizer.pad_token_id
+print(f"Set model pad_token_id to: {model.config.pad_token_id}")
+
 # ---------------------------
 # Metrics (no confusion matrix, clean tqdm)
 # ---------------------------
@@ -131,6 +149,9 @@ trainer = Trainer(
 # Train & Evaluate
 # ---------------------------
 print("Starting training...")
+print(f"Tokenizer pad_token: {tokenizer.pad_token} (id: {tokenizer.pad_token_id})")
+print(f"Model pad_token_id: {model.config.pad_token_id}")
+
 trainer.train()
 results = trainer.evaluate()
 
