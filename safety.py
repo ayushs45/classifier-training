@@ -100,18 +100,21 @@ def compute_metrics(pred):
 # ---------------------------
 training_args = TrainingArguments(
     output_dir=f"./results_{args.dataset_name}",
-    eval_strategy=args.eval_strategy,
+    evaluation_strategy=args.eval_strategy,   # <-- HF uses evaluation_strategy, not eval_strategy
     eval_steps=args.eval_steps,
-    save_strategy="no",
+    save_strategy="epoch",                    # save at end of each epoch
+    save_total_limit=5,                       # optional: keep only last 2 checkpoints
     learning_rate=args.learning_rate,
     per_device_train_batch_size=args.train_batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
     num_train_epochs=args.num_epochs,
     weight_decay=args.weight_decay,
     logging_dir=f"./logs_{args.dataset_name}",
+    logging_strategy="epoch",                 # log once per epoch
     metric_for_best_model="f1",
     greater_is_better=True,
-    report_to="none",
+    report_to="wandb",                        # enable wandb logging
+    run_name=f"{args.dataset_name}_run",      # give your run a name in wandb
     remove_unused_columns=False,
     fp16=True,
     dataloader_num_workers=4,
