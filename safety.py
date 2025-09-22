@@ -99,7 +99,7 @@ def compute_metrics(pred):
 training_args = TrainingArguments(
     output_dir=f"./results_{args.dataset_name}",
     eval_strategy="steps",              # eval every N steps
-    eval_steps=1000,
+    eval_steps=200,
     save_strategy="epoch",                    # save at end of each epoch
     save_total_limit=5,                       # keep latest 5 checkpoints
     learning_rate=args.learning_rate,
@@ -109,7 +109,7 @@ training_args = TrainingArguments(
     weight_decay=args.weight_decay,
     logging_dir=f"./logs_{args.dataset_name}",
     logging_strategy="steps",                 # log every N steps
-    logging_steps=1000,
+    logging_steps=200,
     metric_for_best_model="f1",
     greater_is_better=True,
     report_to="wandb",                        # enable wandb logging
