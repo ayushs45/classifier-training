@@ -98,7 +98,7 @@ def compute_metrics(pred):
 # ---------------------------
 training_args = TrainingArguments(
     output_dir=f"./results_{args.dataset_name}",
-    evaluation_strategy="steps",              # eval every N steps
+    eval_strategy="steps",              # eval every N steps
     eval_steps=2500,
     save_strategy="epoch",                    # save at end of each epoch
     save_total_limit=5,                       # keep latest 5 checkpoints
