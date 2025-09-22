@@ -78,6 +78,9 @@ model.config.label2id = {"no":0, "yes":1}
 # ---------------------------
 # Metrics with confusion matrix
 # ---------------------------
+# ---------------------------
+# Metrics (no confusion matrix, clean tqdm)
+# ---------------------------
 def compute_metrics(pred):
     labels = pred.label_ids
     preds = np.argmax(pred.predictions, axis=1)
@@ -85,43 +88,36 @@ def compute_metrics(pred):
     acc = accuracy_score(labels, preds)
     prec, rec, f1, _ = precision_recall_fscore_support(labels, preds, average="binary")
 
-    cm = confusion_matrix(labels, preds)
-    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["no", "yes"])
-    disp.plot(cmap=plt.cm.Blues)
-    plt.title("Confusion Matrix")
-    plt.show()
-
     return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
-# ---------------------------
-# Training
-# ---------------------------
+
 training_args = TrainingArguments(
     output_dir=f"./results_{args.dataset_name}",
-    eval_strategy="steps",              # eval every N steps
+    eval_strategy="steps",
     eval_steps=200,
-    save_strategy="epoch",                    # save at end of each epoch
-    save_total_limit=5,                       # keep latest 5 checkpoints
+    save_strategy="epoch",
+    save_total_limit=5,
     learning_rate=args.learning_rate,
     per_device_train_batch_size=args.train_batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
     num_train_epochs=args.num_epochs,
     weight_decay=args.weight_decay,
     logging_dir=f"./logs_{args.dataset_name}",
-    logging_strategy="steps",                 # log every N steps
+    logging_strategy="steps",
     logging_steps=200,
     metric_for_best_model="f1",
     greater_is_better=True,
-    report_to="wandb",                        # enable wandb logging
-    run_name=f"{args.dataset_name}_run",      # run name in W&B
+    report_to="wandb",
+    run_name=f"{args.dataset_name}_run",
     remove_unused_columns=False,
     fp16=True,
     dataloader_num_workers=4,
     warmup_ratio=args.warmup_ratio,
     lr_scheduler_type=args.lr_scheduler_type,
     label_names=["labels"],
+    disable_tqdm=False,   # keep clean tqdm
+    log_level="error",    # stop tqdm spam
 )
-
 
 trainer = Trainer(
     model=model,
