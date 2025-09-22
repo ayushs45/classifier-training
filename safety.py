@@ -112,7 +112,7 @@ def compute_metrics(pred):
 training_args = TrainingArguments(
     output_dir=f"./results_{args.dataset_name}",
     eval_strategy="steps",
-    eval_steps=200,
+    eval_steps=1500,
     save_strategy="epoch",
     save_total_limit=5,
     learning_rate=args.learning_rate,
