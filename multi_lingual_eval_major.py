@@ -33,7 +33,7 @@ REPORT_FILE = "safety_eval_report.json"
 # HELPERS
 # ------------------------------
 def build_pipeline(model_entry):
-    """Create a pipeline given either a string or dict with subfolder."""
+    """Create a text-classification pipeline for a model entry."""
     if isinstance(model_entry, str):
         return pipeline(
             "text-classification",
@@ -73,7 +73,7 @@ def run_model_inference(model_entry, texts, batch_size=5):
     clf = build_pipeline(model_entry)
     preds = []
 
-    # Get mapping
+    # Get label mapping
     if isinstance(model_entry, dict):
         label_map = model_entry.get("label_map", {})
     else:
@@ -89,13 +89,13 @@ def run_model_inference(model_entry, texts, batch_size=5):
     ) as pbar:
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-            outputs = clf(batch)  # ✅ positional works
+            outputs = clf(batch)  # positional works for text-classification
             for out in outputs:
                 label = out["label"]
                 if label in label_map:
                     preds.append(label_map[label])
                 else:
-                    # fallback: check common cases
+                    # fallback: numeric or unsafe detection
                     preds.append(1 if "1" in label or "unsafe" in label.lower() else 0)
             pbar.update(1)
 
@@ -126,10 +126,14 @@ def eval_damo_multijail(model_entry):
     preds = run_model_inference(model_entry, texts)
     y_true = [1] * len(texts)
     correct = np.array(preds) == 1
+
     results = {"overall_accuracy": float(correct.mean()), "per_language": {}}
     for lang in set(langs):
         idxs = [i for i, l in enumerate(langs) if l == lang]
         results["per_language"][lang] = float(correct[idxs].mean())
+
+    # small print
+    print(f"    → overall_accuracy: {results['overall_accuracy']:.3f}, sample per_language: {dict(list(results['per_language'].items())[:3])}")
     return results
 
 
@@ -140,7 +144,11 @@ def eval_csrt(model_entry):
     preds = run_model_inference(model_entry, texts)
     y_true = [1] * len(texts)
     correct = np.array(preds) == 1
-    return {"accuracy": float(correct.mean())}
+    accuracy = float(correct.mean())
+
+    # small print
+    print(f"    → accuracy: {accuracy:.3f}")
+    return {"accuracy": accuracy}
 
 
 def eval_rtplx(model_entry):
@@ -153,7 +161,6 @@ def eval_rtplx(model_entry):
 
     overall = compute_metrics(y_true, preds, average="macro")
     results = {"overall": overall, "per_locale": {}}
-
     for lang in set(langs):
         idxs = [i for i, l in enumerate(langs) if l == lang]
         if not idxs:
@@ -161,16 +168,17 @@ def eval_rtplx(model_entry):
         y_sub = [y_true[i] for i in idxs]
         p_sub = [preds[i] for i in idxs]
         results["per_locale"][lang] = compute_metrics(y_sub, p_sub, average="macro")
+
+    # small print
+    print(f"    → overall_f1: {overall['f1']:.3f}, sample per_locale: {dict(list(results['per_locale'].items())[:3])}")
     return results
 
 
 def eval_xsafety(model_entry):
     print("  Evaluating on XSafety...")
     ds = load_dataset("ToxicityPrompts/XSafety", split="test")
-
     filtered = [(t, c) for t, c in zip(ds["text"], ds["category"]) if isinstance(t, str)]
     texts, cats = zip(*filtered)
-
     preds = run_model_inference(model_entry, list(texts))
     y_true = [1] * len(texts)
     correct = np.array(preds) == 1
@@ -179,6 +187,9 @@ def eval_xsafety(model_entry):
     for cat in set(cats):
         idxs = [i for i, c in enumerate(cats) if c == cat]
         results["per_category"][cat] = float(correct[idxs].mean())
+
+    # small print
+    print(f"    → overall_accuracy: {results['overall_accuracy']:.3f}, sample per_category: {dict(list(results['per_category'].items())[:3])}")
     return results
 
 
