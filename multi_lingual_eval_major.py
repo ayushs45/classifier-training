@@ -1,14 +1,14 @@
 import json
+import gc
 import numpy as np
 from datasets import load_dataset
 from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+import torch
 
 # ------------------------------
 # CONFIG
 # ------------------------------
-# - just a string: "facebook/opt-350m"
-# - or a dict: {"name": "...", "subfolder": "..."}
 MODELS = [
     {"name": "repelloai/MultilingualSafety_Research", "subfolder": "xlm-roberta-large-v1"},
     "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
@@ -45,17 +45,24 @@ def build_pipeline(model_entry):
         raise ValueError(f"Unsupported model entry: {model_entry}")
 
 
-def run_model_inference(model_entry, texts, batch_size=16):
+def run_model_inference(model_entry, texts, batch_size=5):
     """Run classifier pipeline (binary: safe vs unsafe)."""
     clf = build_pipeline(model_entry)
     preds = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
         outputs = clf(batch)
-        # assume label 'LABEL_1' = unsafe, 'LABEL_0' = safe (may need to adapt per model)
+        # assume label 'LABEL_1' = unsafe, 'LABEL_0' = safe
         for out in outputs:
             label = out["label"]
             preds.append(1 if "1" in label or "unsafe" in label.lower() else 0)
+
+    # offload model after inference
+    del clf
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     return preds
 
 
@@ -135,13 +142,18 @@ def main():
     final_report = {}
     for model_entry in MODELS:
         model_name = model_entry if isinstance(model_entry, str) else model_entry["name"]
-        print(f"Evaluating model: {model_name}")
+        print(f"\n===== Evaluating model: {model_name} =====")
         model_report = {}
         model_report["DAMO-MultiJail"] = eval_damo_multijail(model_entry)
         model_report["CSRT"] = eval_csrt(model_entry)
         model_report["RTP-LX"] = eval_rtplx(model_entry)
         model_report["XSafety"] = eval_xsafety(model_entry)
         final_report[model_name] = model_report
+
+        # full cleanup between models
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     with open(REPORT_FILE, "w") as f:
         json.dump(final_report, f, indent=2)
