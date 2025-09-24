@@ -45,12 +45,18 @@ def build_pipeline(model_entry):
     elif isinstance(model_entry, dict):
         model_name = model_entry["name"]
         subfolder = model_entry.get("subfolder")
-        model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, subfolder=subfolder
-        )
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name, subfolder=subfolder, trust_remote_code=True
-        )
+
+        if subfolder:
+            model = AutoModelForSequenceClassification.from_pretrained(
+                model_name, subfolder=subfolder
+            )
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name, subfolder=subfolder, trust_remote_code=True
+            )
+        else:
+            model = AutoModelForSequenceClassification.from_pretrained(model_name)
+            tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
         return pipeline(
             "text-classification",
             model=model,
