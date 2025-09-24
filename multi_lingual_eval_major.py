@@ -14,7 +14,7 @@ MODELS = [
     {
         "name": "repelloai/MultilingualSafety_Research",
         "subfolder": "xlm-roberta-large-v1",
-        "label_map": {"SAFE": 0, "UNSAFE": 1},  # binary mapping
+        "label_map": {"SAFE": 0, "UNSAFE": 1},
     },
     {
         "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
@@ -67,14 +67,24 @@ def build_pipeline(model_entry):
         raise ValueError(f"Unsupported model entry: {model_entry}")
 
 
-def run_model_inference(model_entry, texts, batch_size=5):
-    """Run classifier pipeline using model-specific label_map and output numeric preds."""
+def run_model_inference(model_entry, texts, batch_size=8):
+    """Run classifier pipeline and return human-readable predictions."""
     clf = build_pipeline(model_entry)
     preds = []
 
-    label_map = {}
+    # model's label -> numeric 0/1
+    numeric_map = {}
     if isinstance(model_entry, dict):
-        label_map = model_entry.get("label_map", {})
+        numeric_map = model_entry.get("label_map", {})
+
+    # numeric 0/1 -> human-readable
+    if isinstance(model_entry, dict):
+        if "MultilingualSafety_Research" in model_entry["name"]:
+            human_map = {0: "not toxic", 1: "toxic"}
+        else:  # Ayush-Singh models
+            human_map = {0: "no", 1: "yes"}
+    else:
+        human_map = {0: "safe", 1: "unsafe"}
 
     total_batches = (len(texts) + batch_size - 1) // batch_size
     model_name = model_entry if isinstance(model_entry, str) else model_entry["name"]
@@ -85,11 +95,8 @@ def run_model_inference(model_entry, texts, batch_size=5):
             outputs = clf(batch)
             for out in outputs:
                 label = out["label"]
-                if label in label_map:
-                    preds.append(label_map[label])
-                else:
-                    # fallback for unknown labels
-                    preds.append(1 if "1" in label or "unsafe" in label.lower() else 0)
+                num_pred = numeric_map.get(label, 1 if "1" in label or "unsafe" in label.lower() else 0)
+                preds.append(human_map[num_pred])
             pbar.update(1)
 
     del clf
@@ -116,17 +123,18 @@ def eval_damo_multijail(model_entry):
     ds = load_dataset("ToxicityPrompts/DAMO-MultiJail", split="test")
     texts = [t for t in ds["text"] if isinstance(t, str)]
     langs = ds["language"]
+    y_true = [1 if l > 0 else 0 for l in ds["label"]]
 
-    preds = run_model_inference(model_entry, texts)
-    y_true = [1] * len(texts)  # All DAMO-MultiJail prompts are unsafe
-    correct = np.array(preds) == 1
+    preds_human = run_model_inference(model_entry, texts)
+    # convert back to numeric for metrics
+    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
 
+    correct = np.array(y_pred) == np.array(y_true)
     results = {"overall_accuracy": float(correct.mean()), "per_language": {}}
     for lang in set(langs):
         idxs = [i for i, l in enumerate(langs) if l == lang]
         results["per_language"][lang] = float(correct[idxs].mean())
 
-    # Small print
     print(f"    → overall_accuracy: {results['overall_accuracy']:.3f}, sample per_language: {dict(list(results['per_language'].items())[:3])}")
     return results
 
@@ -135,13 +143,13 @@ def eval_csrt(model_entry):
     print("  Evaluating on CSRT...")
     ds = load_dataset("ToxicityPrompts/CSRT", split="code_switch")
     texts = [t for t in ds["text"] if isinstance(t, str)]
+    y_true = [1 if l > 0 else 0 for l in ds["label"]]
 
-    preds = run_model_inference(model_entry, texts)
-    y_true = [1] * len(texts)  # All are unsafe examples
-    correct = np.array(preds) == 1
+    preds_human = run_model_inference(model_entry, texts)
+    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
+
+    correct = np.array(y_pred) == np.array(y_true)
     accuracy = float(correct.mean())
-
-    # Small print
     print(f"    → accuracy: {accuracy:.3f}")
     return {"accuracy": accuracy}
 
@@ -153,19 +161,20 @@ def eval_rtplx(model_entry):
     langs = ds["Locale"]
     y_true = [1 if ann["Toxicity"] > 1 else 0 for ann in ds["PromptAnnotations"]]
 
-    preds = run_model_inference(model_entry, texts)
-    overall = compute_metrics(y_true, preds, average="macro")
+    preds_human = run_model_inference(model_entry, texts)
+    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
 
+    overall = compute_metrics(y_true, y_pred, average="macro")
     results = {"overall": overall, "per_locale": {}}
+
     for lang in set(langs):
         idxs = [i for i, l in enumerate(langs) if l == lang]
         if not idxs:
             continue
         y_sub = [y_true[i] for i in idxs]
-        p_sub = [preds[i] for i in idxs]
+        p_sub = [y_pred[i] for i in idxs]
         results["per_locale"][lang] = compute_metrics(y_sub, p_sub, average="macro")
 
-    # Small print
     print(f"    → overall_f1: {overall['f1']:.3f}, sample per_locale: {dict(list(results['per_locale'].items())[:3])}")
     return results
 
@@ -173,19 +182,19 @@ def eval_rtplx(model_entry):
 def eval_xsafety(model_entry):
     print("  Evaluating on XSafety...")
     ds = load_dataset("ToxicityPrompts/XSafety", split="test")
-    filtered = [(t, c) for t, c in zip(ds["text"], ds["category"]) if isinstance(t, str)]
-    texts, cats = zip(*filtered)
+    filtered = [(t, c, l) for t, c, l in zip(ds["text"], ds["category"], ds["label"]) if isinstance(t, str)]
+    texts, cats, labels = zip(*filtered)
 
-    preds = run_model_inference(model_entry, list(texts))
-    y_true = [1] * len(texts)  # all unsafe examples
-    correct = np.array(preds) == 1
+    preds_human = run_model_inference(model_entry, list(texts))
+    y_true = [1 if l > 0 else 0 for l in labels]
+    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
 
+    correct = np.array(y_pred) == np.array(y_true)
     results = {"overall_accuracy": float(correct.mean()), "per_category": {}}
     for cat in set(cats):
         idxs = [i for i, c in enumerate(cats) if c == cat]
         results["per_category"][cat] = float(correct[idxs].mean())
 
-    # Small print
     print(f"    → overall_accuracy: {results['overall_accuracy']:.3f}, sample per_category: {dict(list(results['per_category'].items())[:3])}")
     return results
 
@@ -205,7 +214,6 @@ def main():
         model_report["XSafety"] = eval_xsafety(model_entry)
         final_report[model_name] = model_report
 
-        # cleanup
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
