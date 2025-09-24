@@ -14,25 +14,26 @@ MODELS = [
     {
         "name": "repelloai/MultilingualSafety_Research",
         "subfolder": "xlm-roberta-large-v1",
-        "label_map": {"SAFE": 0, "UNSAFE": 1},
+        "label_map": {0: "not toxic", 1: "toxic"},
     },
     {
         "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
-        "label_map": {"LABEL_0": 0, "LABEL_1": 1},
+        "label_map": {0: "no", 1: "yes"},
     },
     {
         "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_600k",
-        "label_map": {"LABEL_0": 0, "LABEL_1": 1},
+        "label_map": {0: "no", 1: "yes"},
     },
 ]
 
 REPORT_FILE = "safety_eval_report.json"
 
+
 # ------------------------------
 # HELPERS
 # ------------------------------
 def build_pipeline(model_entry):
-    """Create a text-classification pipeline for a model entry."""
+    """Create a pipeline given either a string or dict with subfolder."""
     if isinstance(model_entry, str):
         return pipeline(
             "text-classification",
@@ -67,24 +68,12 @@ def build_pipeline(model_entry):
         raise ValueError(f"Unsupported model entry: {model_entry}")
 
 
-def run_model_inference(model_entry, texts, batch_size=8):
-    """Run classifier pipeline and return human-readable predictions."""
+def run_model_inference(model_entry, texts, batch_size=16):
+    """Run classifier pipeline using model-specific label_map."""
     clf = build_pipeline(model_entry)
     preds = []
 
-    # model's label -> numeric 0/1
-    numeric_map = {}
-    if isinstance(model_entry, dict):
-        numeric_map = model_entry.get("label_map", {})
-
-    # numeric 0/1 -> human-readable
-    if isinstance(model_entry, dict):
-        if "MultilingualSafety_Research" in model_entry["name"]:
-            human_map = {0: "not toxic", 1: "toxic"}
-        else:  # Ayush-Singh models
-            human_map = {0: "no", 1: "yes"}
-    else:
-        human_map = {0: "safe", 1: "unsafe"}
+    label_map = model_entry.get("label_map", {}) if isinstance(model_entry, dict) else {}
 
     total_batches = (len(texts) + batch_size - 1) // batch_size
     model_name = model_entry if isinstance(model_entry, str) else model_entry["name"]
@@ -95,8 +84,13 @@ def run_model_inference(model_entry, texts, batch_size=8):
             outputs = clf(batch)
             for out in outputs:
                 label = out["label"]
-                num_pred = numeric_map.get(label, 1 if "1" in label or "unsafe" in label.lower() else 0)
-                preds.append(human_map[num_pred])
+                # Convert string labels like 'LABEL_0' to int if needed
+                if label.startswith("LABEL_"):
+                    label_int = int(label.split("_")[1])
+                    preds.append(label_map.get(label_int, label_int))
+                else:
+                    # fallback: use mapping or common patterns
+                    preds.append(label_map.get(label, label))
             pbar.update(1)
 
     del clf
@@ -109,9 +103,7 @@ def run_model_inference(model_entry, texts, batch_size=8):
 
 def compute_metrics(y_true, y_pred, average="macro"):
     acc = accuracy_score(y_true, y_pred)
-    p, r, f1, _ = precision_recall_fscore_support(
-        y_true, y_pred, average=average, zero_division=0
-    )
+    p, r, f1, _ = precision_recall_fscore_support(y_true, y_pred, average=average, zero_division=0)
     return {"accuracy": acc, "precision": p, "recall": r, "f1": f1}
 
 
@@ -123,11 +115,11 @@ def eval_damo_multijail(model_entry):
     ds = load_dataset("ToxicityPrompts/DAMO-MultiJail", split="test")
     texts = [t for t in ds["text"] if isinstance(t, str)]
     langs = ds["language"]
-    y_true = [1 if l > 0 else 0 for l in ds["label"]]
 
-    preds_human = run_model_inference(model_entry, texts)
-    # convert back to numeric for metrics
-    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
+    preds = run_model_inference(model_entry, texts)
+    # all unsafe
+    y_true = [1] * len(texts)
+    y_pred = [1 if p in ["toxic", "yes"] else 0 for p in preds]
 
     correct = np.array(y_pred) == np.array(y_true)
     results = {"overall_accuracy": float(correct.mean()), "per_language": {}}
@@ -143,15 +135,14 @@ def eval_csrt(model_entry):
     print("  Evaluating on CSRT...")
     ds = load_dataset("ToxicityPrompts/CSRT", split="code_switch")
     texts = [t for t in ds["text"] if isinstance(t, str)]
-    y_true = [1 if l > 0 else 0 for l in ds["label"]]
 
-    preds_human = run_model_inference(model_entry, texts)
-    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
+    preds = run_model_inference(model_entry, texts)
+    y_true = [1] * len(texts)  # all unsafe
+    y_pred = [1 if p in ["toxic", "yes"] else 0 for p in preds]
 
-    correct = np.array(y_pred) == np.array(y_true)
-    accuracy = float(correct.mean())
-    print(f"    → accuracy: {accuracy:.3f}")
-    return {"accuracy": accuracy}
+    acc = float((np.array(y_pred) == np.array(y_true)).mean())
+    print(f"    → accuracy: {acc:.3f}")
+    return {"accuracy": acc}
 
 
 def eval_rtplx(model_entry):
@@ -161,8 +152,8 @@ def eval_rtplx(model_entry):
     langs = ds["Locale"]
     y_true = [1 if ann["Toxicity"] > 1 else 0 for ann in ds["PromptAnnotations"]]
 
-    preds_human = run_model_inference(model_entry, texts)
-    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
+    preds = run_model_inference(model_entry, texts)
+    y_pred = [1 if p in ["toxic", "yes"] else 0 for p in preds]
 
     overall = compute_metrics(y_true, y_pred, average="macro")
     results = {"overall": overall, "per_locale": {}}
@@ -175,19 +166,20 @@ def eval_rtplx(model_entry):
         p_sub = [y_pred[i] for i in idxs]
         results["per_locale"][lang] = compute_metrics(y_sub, p_sub, average="macro")
 
-    print(f"    → overall_f1: {overall['f1']:.3f}, sample per_locale: {dict(list(results['per_locale'].items())[:3])}")
+    print(f"    → overall F1: {overall['f1']:.3f}, sample per_locale: {dict(list(results['per_locale'].items())[:3])}")
     return results
 
 
 def eval_xsafety(model_entry):
     print("  Evaluating on XSafety...")
     ds = load_dataset("ToxicityPrompts/XSafety", split="test")
-    filtered = [(t, c, l) for t, c, l in zip(ds["text"], ds["category"], ds["label"]) if isinstance(t, str)]
-    texts, cats, labels = zip(*filtered)
 
-    preds_human = run_model_inference(model_entry, list(texts))
-    y_true = [1 if l > 0 else 0 for l in labels]
-    y_pred = [0 if p in ["not toxic", "no"] else 1 for p in preds_human]
+    filtered = [(t, c) for t, c in zip(ds["text"], ds["category"]) if isinstance(t, str)]
+    texts, cats = zip(*filtered)
+
+    preds = run_model_inference(model_entry, list(texts))
+    y_true = [1] * len(texts)
+    y_pred = [1 if p in ["toxic", "yes"] else 0 for p in preds]
 
     correct = np.array(y_pred) == np.array(y_true)
     results = {"overall_accuracy": float(correct.mean()), "per_category": {}}
@@ -205,7 +197,7 @@ def eval_xsafety(model_entry):
 def main():
     final_report = {}
     for model_entry in MODELS:
-        model_name = model_entry if isinstance(model_entry, str) else model_entry["name"]
+        model_name = model_entry["name"]
         print(f"\n===== Evaluating model: {model_name} =====")
         model_report = {}
         model_report["DAMO-MultiJail"] = eval_damo_multijail(model_entry)
