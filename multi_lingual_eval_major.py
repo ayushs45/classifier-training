@@ -63,7 +63,7 @@ def run_model_inference(model_entry, texts, batch_size=5):
     with tqdm(total=total_batches, desc=f"Processing batches ({model_name.split('/')[-1]})", unit="batch") as pbar:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            outputs = clf(text=batch)   # ✅ FIX: explicit `text=...`
+            outputs = clf(batch)   # ✅ positional works for text-classification
             for out in outputs:
                 label = out["label"]
                 preds.append(1 if "1" in label or "unsafe" in label.lower() else 0)
@@ -91,7 +91,7 @@ def compute_metrics(y_true, y_pred, average="macro"):
 def eval_damo_multijail(model_entry):
     print("  Evaluating on DAMO-MultiJail...")
     ds = load_dataset("ToxicityPrompts/DAMO-MultiJail", split="test")
-    texts = ds["text"]
+    texts = [t for t in ds["text"] if isinstance(t, str)]
     langs = ds["language"]
     preds = run_model_inference(model_entry, texts)
     y_true = [1] * len(texts)
@@ -106,7 +106,7 @@ def eval_damo_multijail(model_entry):
 def eval_csrt(model_entry):
     print("  Evaluating on CSRT...")
     ds = load_dataset("ToxicityPrompts/CSRT", split="code_switch")
-    texts = ds["text"]
+    texts = [t for t in ds["text"] if isinstance(t, str)]
     preds = run_model_inference(model_entry, texts)
     y_true = [1] * len(texts)
     correct = np.array(preds) == 1
@@ -116,7 +116,7 @@ def eval_csrt(model_entry):
 def eval_rtplx(model_entry):
     print("  Evaluating on RTP-LX...")
     ds = load_dataset("ToxicityPrompts/RTP-LX", split="test")
-    texts = ds["Prompt"]
+    texts = [t for t in ds["Prompt"] if isinstance(t, str)]
     langs = ds["Locale"]
     y_true = [1 if ann["Toxicity"] > 1 else 0 for ann in ds["PromptAnnotations"]]
     preds = run_model_inference(model_entry, texts)
@@ -137,7 +137,7 @@ def eval_rtplx(model_entry):
 def eval_xsafety(model_entry):
     print("  Evaluating on XSafety...")
     ds = load_dataset("ToxicityPrompts/XSafety", split="test")
-    texts = ds["text"]
+    texts = [t for t in ds["text"] if isinstance(t, str)]
     cats = ds["category"]
     preds = run_model_inference(model_entry, texts)
     y_true = [1] * len(texts)
