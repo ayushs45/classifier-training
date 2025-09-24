@@ -1,8 +1,9 @@
 import json
 import gc
 import numpy as np
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
 from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
+from transformers.pipelines.pt_utils import KeyDataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import torch
 from tqdm import tqdm
@@ -114,33 +115,34 @@ def normalize_prediction(pred, label_map=None):
 
 
 def run_model_inference(model_entry, texts, batch_size=16):
-    """Run classifier pipeline using model-specific label_map."""
+    """Run classifier pipeline using KeyDataset for efficient batching."""
     try:
         clf = build_pipeline(model_entry)
-        preds = []
-
+        
         label_map = model_entry.get("label_map", {}) if isinstance(model_entry, dict) else {}
         model_name = model_entry if isinstance(model_entry, str) else model_entry["name"]
 
-        total_batches = (len(texts) + batch_size - 1) // batch_size
-
-        with tqdm(total=total_batches, desc=f"Processing batches ({model_name.split('/')[-1]})", unit="batch") as pbar:
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                # Handle empty or None texts
-                batch = [str(text) if text is not None else "" for text in batch]
-                
-                try:
-                    outputs = clf(batch)
-                    for out in outputs:
-                        label = out["label"]
-                        normalized_pred = normalize_prediction(label, label_map)
-                        preds.append(normalized_pred)
-                except Exception as e:
-                    logger.warning(f"Error processing batch: {e}, filling with safe predictions")
-                    preds.extend([0] * len(batch))
-                
-                pbar.update(1)
+        # Create a dataset from texts for KeyDataset usage
+        # Handle None values by converting to empty strings
+        clean_texts = [str(text) if text is not None else "" for text in texts]
+        text_dataset = Dataset.from_dict({"text": clean_texts})
+        
+        preds = []
+        
+        # Use KeyDataset for efficient batching
+        total_samples = len(clean_texts)
+        with tqdm(total=total_samples, desc=f"Processing samples ({model_name.split('/')[-1]})", unit="sample") as pbar:
+            try:
+                for output in clf(KeyDataset(text_dataset, "text"), batch_size=batch_size):
+                    label = output["label"]
+                    normalized_pred = normalize_prediction(label, label_map)
+                    preds.append(normalized_pred)
+                    pbar.update(1)
+            except Exception as e:
+                logger.warning(f"Error during pipeline processing: {e}")
+                # Fill remaining predictions with safe (0) if processing failed
+                remaining = total_samples - len(preds)
+                preds.extend([0] * remaining)
 
         del clf
         gc.collect()
