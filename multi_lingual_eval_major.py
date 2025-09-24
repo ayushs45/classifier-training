@@ -11,9 +11,19 @@ from tqdm import tqdm
 # CONFIG
 # ------------------------------
 MODELS = [
-    {"name": "repelloai/MultilingualSafety_Research", "subfolder": "xlm-roberta-large-v1"},
-    "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
-    "Ayush-Singh/mmBert_final_model_multilingual_safety_600k"
+    {
+        "name": "repelloai/MultilingualSafety_Research",
+        "subfolder": "xlm-roberta-large-v1",
+        "label_map": {"SAFE": "not toxic", "UNSAFE": "toxic"},
+    },
+    {
+        "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
+        "label_map": {"LABEL_0": "no", "LABEL_1": "yes"},
+    },
+    {
+        "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_600k",
+        "label_map": {"LABEL_0": "no", "LABEL_1": "yes"},
+    },
 ]
 
 REPORT_FILE = "safety_eval_report.json"
@@ -53,20 +63,34 @@ def build_pipeline(model_entry):
 
 
 def run_model_inference(model_entry, texts, batch_size=5):
-    """Run classifier pipeline (binary: safe vs unsafe) with progress bar."""
+    """Run classifier pipeline using model-specific label_map."""
     clf = build_pipeline(model_entry)
     preds = []
-    
+
+    # Get mapping
+    if isinstance(model_entry, dict):
+        label_map = model_entry.get("label_map", {})
+    else:
+        label_map = {}
+
     total_batches = (len(texts) + batch_size - 1) // batch_size
     model_name = model_entry if isinstance(model_entry, str) else model_entry["name"]
-    
-    with tqdm(total=total_batches, desc=f"Processing batches ({model_name.split('/')[-1]})", unit="batch") as pbar:
+
+    with tqdm(
+        total=total_batches,
+        desc=f"Processing batches ({model_name.split('/')[-1]})",
+        unit="batch",
+    ) as pbar:
         for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            outputs = clf(batch)   # ✅ positional works for text-classification
+            batch = texts[i : i + batch_size]
+            outputs = clf(batch)  # ✅ positional works
             for out in outputs:
                 label = out["label"]
-                preds.append(1 if "1" in label or "unsafe" in label.lower() else 0)
+                if label in label_map:
+                    preds.append(label_map[label])
+                else:
+                    # fallback: check common cases
+                    preds.append(1 if "1" in label or "unsafe" in label.lower() else 0)
             pbar.update(1)
 
     del clf
@@ -164,7 +188,7 @@ def main():
         model_report["XSafety"] = eval_xsafety(model_entry)
         final_report[model_name] = model_report
 
-        # full cleanup between models
+        # cleanup
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
