@@ -29,17 +29,23 @@ def build_pipeline(model_entry):
             "text-classification",
             model=model_entry,
             tokenizer=model_entry,
+            padding=True,
             truncation=True,
         )
     elif isinstance(model_entry, dict):
         model_name = model_entry["name"]
         subfolder = model_entry.get("subfolder")
-        model = AutoModelForSequenceClassification.from_pretrained(model_name, subfolder=subfolder)
-        tokenizer = AutoTokenizer.from_pretrained(model_name, subfolder=subfolder, trust_remote_code=True)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, subfolder=subfolder
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name, subfolder=subfolder, trust_remote_code=True
+        )
         return pipeline(
             "text-classification",
             model=model,
             tokenizer=tokenizer,
+            padding=True,
             truncation=True,
         )
     else:
@@ -51,21 +57,18 @@ def run_model_inference(model_entry, texts, batch_size=5):
     clf = build_pipeline(model_entry)
     preds = []
     
-    # Create progress bar for batches
     total_batches = (len(texts) + batch_size - 1) // batch_size
     model_name = model_entry if isinstance(model_entry, str) else model_entry["name"]
     
     with tqdm(total=total_batches, desc=f"Processing batches ({model_name.split('/')[-1]})", unit="batch") as pbar:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            outputs = clf(batch)
-            # assume label 'LABEL_1' = unsafe, 'LABEL_0' = safe
+            outputs = clf(text=batch)   # ✅ FIX: explicit `text=...`
             for out in outputs:
                 label = out["label"]
                 preds.append(1 if "1" in label or "unsafe" in label.lower() else 0)
             pbar.update(1)
 
-    # offload model after inference
     del clf
     gc.collect()
     if torch.cuda.is_available():
@@ -85,7 +88,6 @@ def compute_metrics(y_true, y_pred, average="macro"):
 # ------------------------------
 # DATASET EVALUATIONS
 # ------------------------------
-
 def eval_damo_multijail(model_entry):
     print("  Evaluating on DAMO-MultiJail...")
     ds = load_dataset("ToxicityPrompts/DAMO-MultiJail", split="test")
