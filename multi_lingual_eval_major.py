@@ -161,11 +161,14 @@ def eval_rtplx(model_entry):
 def eval_xsafety(model_entry):
     print("  Evaluating on XSafety...")
     ds = load_dataset("ToxicityPrompts/XSafety", split="test")
-    texts = [t for t in ds["text"] if isinstance(t, str)]
-    cats = ds["category"]
-    preds = run_model_inference(model_entry, texts)
+
+    filtered = [(t, c) for t, c in zip(ds["text"], ds["category"]) if isinstance(t, str)]
+    texts, cats = zip(*filtered)
+
+    preds = run_model_inference(model_entry, list(texts))
     y_true = [1] * len(texts)
     correct = np.array(preds) == 1
+
     results = {"overall_accuracy": float(correct.mean()), "per_category": {}}
     for cat in set(cats):
         idxs = [i for i, c in enumerate(cats) if c == cat]
