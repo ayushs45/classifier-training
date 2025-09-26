@@ -7,6 +7,7 @@ import torch
 from tqdm import tqdm
 import logging
 import re
+import argparse
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------
 MODEL_NAME = "Qwen/Qwen3Guard-Gen-0.6B"
 REPORT_FILE = "qwen3guard_safety_eval_report.json"
+DEFAULT_BATCH_SIZE = 8  # Default batch size if not specified
 
 # ------------------------------
 # QWEN3GUARD HELPERS
@@ -92,22 +94,77 @@ def classify_text(model, tokenizer, text, max_retries=3):
                 torch.cuda.empty_cache()
 
 
-def run_batch_inference(model, tokenizer, texts, batch_size=8):
-    """Run inference on a batch of texts. Note: Qwen3Guard processes one at a time due to chat format."""
+def run_batch_inference(model, tokenizer, texts, batch_size):
+    """Run inference on a batch of texts."""
     predictions = []
     
+    # Process texts in batches
     for i in tqdm(range(0, len(texts), batch_size), desc="Processing texts"):
         batch_texts = texts[i:i + batch_size]
+        batch_predictions = []
         
-        for text in batch_texts:
+        # Prepare all inputs for the batch
+        batch_inputs = []
+        valid_indices = []
+        
+        for idx, text in enumerate(batch_texts):
             if text is None or text.strip() == "":
-                predictions.append(0)  # Default to safe for empty texts
+                batch_predictions.append(0)  # Default to safe for empty texts
             else:
-                pred = classify_text(model, tokenizer, text)
-                predictions.append(pred)
+                try:
+                    messages = [{"role": "user", "content": str(text)}]
+                    formatted_text = tokenizer.apply_chat_template(messages, tokenize=False)
+                    batch_inputs.append(formatted_text)
+                    valid_indices.append(len(batch_predictions))
+                    batch_predictions.append(None)  # Placeholder
+                except Exception as e:
+                    logger.warning(f"Error formatting text: {e}")
+                    batch_predictions.append(0)  # Default to safe
+        
+        # Process valid inputs in batch if any
+        if batch_inputs:
+            try:
+                # Tokenize batch
+                model_inputs = tokenizer(
+                    batch_inputs, 
+                    return_tensors="pt", 
+                    padding=True, 
+                    truncation=True,
+                    max_length=512
+                ).to(model.device)
+                
+                # Generate responses
+                with torch.no_grad():
+                    generated_ids = model.generate(
+                        **model_inputs,
+                        max_new_tokens=128,
+                        do_sample=False,
+                        pad_token_id=tokenizer.eos_token_id
+                    )
+                
+                # Process outputs
+                for batch_idx, valid_idx in enumerate(valid_indices):
+                    try:
+                        input_len = len(model_inputs.input_ids[batch_idx])
+                        output_ids = generated_ids[batch_idx][input_len:].tolist()
+                        content = tokenizer.decode(output_ids, skip_special_tokens=True)
+                        label = extract_safety_label(content)
+                        batch_predictions[valid_idx] = label
+                    except Exception as e:
+                        logger.warning(f"Error processing batch output {batch_idx}: {e}")
+                        batch_predictions[valid_idx] = 0  # Default to safe
+                        
+            except Exception as e:
+                logger.error(f"Error in batch processing: {e}")
+                # Fill failed predictions with safe default
+                for valid_idx in valid_indices:
+                    if batch_predictions[valid_idx] is None:
+                        batch_predictions[valid_idx] = 0
+        
+        predictions.extend(batch_predictions)
         
         # Clear cache periodically
-        if i % 50 == 0 and torch.cuda.is_available():
+        if i % (batch_size * 10) == 0 and torch.cuda.is_available():
             torch.cuda.empty_cache()
     
     return predictions
@@ -149,7 +206,7 @@ def compute_binary_metrics(y_true, y_pred):
 # ------------------------------
 # DATASET EVALUATIONS
 # ------------------------------
-def eval_damo_multijail(model, tokenizer):
+def eval_damo_multijail(model, tokenizer, batch_size):
     """Evaluate on DAMO-MultiJail dataset - all unsafe prompts."""
     print("Evaluating on DAMO-MultiJail...")
     try:
@@ -161,7 +218,7 @@ def eval_damo_multijail(model, tokenizer):
             return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
         
         print(f"Processing {len(texts)} samples...")
-        preds = run_batch_inference(model, tokenizer, texts)
+        preds = run_batch_inference(model, tokenizer, texts, batch_size)
         y_true = [1] * len(texts)  # all unsafe
         
         metrics = compute_binary_metrics(y_true, preds)
@@ -173,7 +230,7 @@ def eval_damo_multijail(model, tokenizer):
         return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0, "error": str(e)}
 
 
-def eval_csrt(model, tokenizer):
+def eval_csrt(model, tokenizer, batch_size):
     """Evaluate on CSRT dataset - code_switch split, all unsafe."""
     print("Evaluating on CSRT...")
     try:
@@ -185,7 +242,7 @@ def eval_csrt(model, tokenizer):
             return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
         
         print(f"Processing {len(texts)} samples...")
-        preds = run_batch_inference(model, tokenizer, texts)
+        preds = run_batch_inference(model, tokenizer, texts, batch_size)
         y_true = [1] * len(texts)  # all unsafe
         
         metrics = compute_binary_metrics(y_true, preds)
@@ -197,7 +254,7 @@ def eval_csrt(model, tokenizer):
         return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0, "error": str(e)}
 
 
-def eval_rtplx(model, tokenizer):
+def eval_rtplx(model, tokenizer, batch_size):
     """Evaluate on RTP-LX dataset - mixed safe/unsafe based on Toxicity score."""
     print("Evaluating on RTP-LX...")
     try:
@@ -220,7 +277,7 @@ def eval_rtplx(model, tokenizer):
         
         texts, y_true = zip(*valid_data)
         print(f"Processing {len(texts)} samples...")
-        preds = run_batch_inference(model, tokenizer, list(texts))
+        preds = run_batch_inference(model, tokenizer, list(texts), batch_size)
         
         metrics = compute_binary_metrics(y_true, preds)
         print(f"→ Accuracy: {metrics['accuracy']:.3f}, F1: {metrics['f1']:.3f}")
@@ -231,7 +288,7 @@ def eval_rtplx(model, tokenizer):
         return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0, "error": str(e)}
 
 
-def eval_xsafety(model, tokenizer):
+def eval_xsafety(model, tokenizer, batch_size):
     """Evaluate on XSafety dataset - all unsafe prompts."""
     print("Evaluating on XSafety...")
     try:
@@ -243,7 +300,7 @@ def eval_xsafety(model, tokenizer):
             return {"accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
         
         print(f"Processing {len(texts)} samples...")
-        preds = run_batch_inference(model, tokenizer, texts)
+        preds = run_batch_inference(model, tokenizer, texts, batch_size)
         y_true = [1] * len(texts)  # all unsafe
         
         metrics = compute_binary_metrics(y_true, preds)
@@ -260,6 +317,19 @@ def eval_xsafety(model, tokenizer):
 # ------------------------------
 def main():
     """Main evaluation function."""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Qwen3Guard Safety Benchmark")
+    parser.add_argument(
+        "--batch_size", 
+        type=int, 
+        default=DEFAULT_BATCH_SIZE,
+        help=f"Batch size for processing (default: {DEFAULT_BATCH_SIZE})"
+    )
+    args = parser.parse_args()
+    
+    batch_size = args.batch_size
+    print(f"Using batch size: {batch_size}")
+    
     print(f"Loading Qwen3Guard model: {MODEL_NAME}")
     
     try:
@@ -283,10 +353,10 @@ def main():
     
     # Run evaluations
     try:
-        results["DAMO-MultiJail"] = eval_damo_multijail(model, tokenizer)
-        results["CSRT"] = eval_csrt(model, tokenizer)
-        results["RTP-LX"] = eval_rtplx(model, tokenizer)
-        results["XSafety"] = eval_xsafety(model, tokenizer)
+        results["DAMO-MultiJail"] = eval_damo_multijail(model, tokenizer, batch_size)
+        results["CSRT"] = eval_csrt(model, tokenizer, batch_size)
+        results["RTP-LX"] = eval_rtplx(model, tokenizer, batch_size)
+        results["XSafety"] = eval_xsafety(model, tokenizer, batch_size)
         
     except Exception as e:
         logger.error(f"Error during evaluation: {e}")
@@ -295,6 +365,7 @@ def main():
     # Create final report
     final_report = {
         "model": MODEL_NAME,
+        "batch_size": batch_size,
         "results": results,
         "summary": {}
     }
@@ -325,6 +396,7 @@ def main():
     print("BENCHMARK RESULTS SUMMARY")
     print(f"{'='*50}")
     print(f"Model: {MODEL_NAME}")
+    print(f"Batch Size: {batch_size}")
     
     for dataset, metrics in results.items():
         if isinstance(metrics, dict) and "accuracy" in metrics:
