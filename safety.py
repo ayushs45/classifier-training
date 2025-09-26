@@ -34,7 +34,7 @@ args = parser.parse_args()
 # Load dataset
 # ---------------------------
 print(f"Loading dataset {args.dataset_name}...")
-ds = load_dataset(f"Ayush-Singh/{args.dataset_name}")['train']
+ds = load_dataset(args.dataset_name)['train']
 
 # ---------------------------
 # Map labels - Updated for binary labels (1/0)
@@ -134,7 +134,7 @@ def compute_metrics(pred):
 
 
 training_args = TrainingArguments(
-    output_dir=f"./results_{args.dataset_name}",
+    output_dir=f"./results_{args.model_name}_{args.dataset_name}",
     eval_strategy="steps",
     eval_steps=1500,
     save_strategy="epoch",
@@ -144,13 +144,13 @@ training_args = TrainingArguments(
     per_device_eval_batch_size=args.eval_batch_size,
     num_train_epochs=args.num_epochs,
     weight_decay=args.weight_decay,
-    logging_dir=f"./logs_{args.dataset_name}",
+    logging_dir=f"./logs_{args.model_name}_{args.dataset_name}",
     logging_strategy="steps",
     logging_steps=200,
     metric_for_best_model="f1",
     greater_is_better=True,
     report_to="wandb",
-    run_name=f"{args.dataset_name}_run",
+    run_name=f"{args.model_name}_{args.dataset_name}_run",
     remove_unused_columns=False,
     fp16=True,
     dataloader_num_workers=4,
@@ -182,7 +182,7 @@ results = trainer.evaluate()
 print(f"Evaluation results on {args.dataset_name} validation set:")
 print(results)
 
-output_dir = f"./final_model_{args.dataset_name}"
+output_dir = f"./final_model_{args.model_name}_{args.dataset_name}"
 trainer.save_model(output_dir)
 tokenizer.save_pretrained(output_dir)
 
