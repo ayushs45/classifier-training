@@ -10,6 +10,7 @@ from transformers import (
     TrainerCallback,
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from huggingface_hub import login
 
 
 # ---------------------------
@@ -29,8 +30,25 @@ parser.add_argument("--lr_scheduler_type", type=str, default="cosine", help="LR 
 parser.add_argument("--max_length", type=int, default=512, help="Max sequence length")
 parser.add_argument("--hub_repo", type=str, default=None, help="Hugging Face Hub repo (e.g. username/model-name)")
 parser.add_argument("--push_steps", type=int, default=0, help="Push to Hub every N steps (0 = disable)")
+parser.add_argument("--hf_key", type=str, default=None, help="Hugging Face API key for authentication")
 
 args = parser.parse_args()
+
+
+# ---------------------------
+# Hugging Face Authentication
+# ---------------------------
+if args.hf_key:
+    try:
+        print("🔐 Logging into Hugging Face Hub...")
+        login(args.hf_key)
+        print("✅ Successfully logged into Hugging Face Hub")
+    except Exception as e:
+        print(f"❌ Failed to login to Hugging Face Hub: {str(e)}")
+        if args.hub_repo:
+            print("⚠️  Warning: Hub push functionality may not work without authentication")
+elif args.hub_repo:
+    print("⚠️  Warning: No HF key provided, but hub_repo specified. Hub push may fail without authentication")
 
 
 # ---------------------------
