@@ -7,8 +7,9 @@ from transformers import (
     AutoModelForSequenceClassification,
     Trainer,
     TrainingArguments,
+    TrainerCallback,
 )
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 
 # ---------------------------
@@ -26,6 +27,8 @@ parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight dec
 parser.add_argument("--warmup_ratio", type=float, default=0.1, help="Warmup ratio")
 parser.add_argument("--lr_scheduler_type", type=str, default="cosine", help="LR scheduler type")
 parser.add_argument("--max_length", type=int, default=512, help="Max sequence length")
+parser.add_argument("--hub_repo", type=str, default=None, help="Hugging Face Hub repo (e.g. username/model-name)")
+parser.add_argument("--push_steps", type=int, default=0, help="Push to Hub every N steps (0 = disable)")
 
 args = parser.parse_args()
 
@@ -37,13 +40,10 @@ print(f"Loading dataset {args.dataset_name}...")
 ds = load_dataset(args.dataset_name)['train']
 
 # ---------------------------
-# Map labels - Updated for binary labels (1/0)
+# Map labels
 # ---------------------------
 def map_labels(example):
-    """Map labels to ensure they are integers 0 or 1"""
     label = example["label"]
-    
-    # Handle different label formats
     if isinstance(label, str):
         if label.lower() in ["yes", "1", "true", "positive"]:
             return {"labels": 1}
@@ -52,47 +52,37 @@ def map_labels(example):
         else:
             raise ValueError(f"Unknown string label: {label}")
     elif isinstance(label, (int, float)):
-        # If already numeric, ensure it's 0 or 1
         return {"labels": int(label)}
     else:
         raise ValueError(f"Unknown label type: {type(label)} with value: {label}")
 
 ds = ds.map(map_labels)
 
-# Split train/val (10% validation)
 dataset = ds.train_test_split(test_size=0.02, seed=42)
 train_ds, val_ds = dataset["train"], dataset["test"]
 
 print("Train size:", len(train_ds))
 print("Validation size:", len(val_ds))
 
-# Print label distribution
-train_labels = [ex["labels"] for ex in train_ds]
-val_labels = [ex["labels"] for ex in val_ds]
-print(f"Train label distribution: {np.bincount(train_labels)}")
-print(f"Validation label distribution: {np.bincount(val_labels)}")
 
 # ---------------------------
-# Tokenizer with padding token fix
+# Tokenizer
 # ---------------------------
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
 
-# Fix for models without padding token (like Qwen, Llama, etc.)
 if tokenizer.pad_token is None:
-    # Try to use eos_token as pad_token
     if tokenizer.eos_token is not None:
         tokenizer.pad_token = tokenizer.eos_token
         print(f"Set pad_token to eos_token: {tokenizer.pad_token}")
     else:
-        # Fallback: add a new pad token
         tokenizer.add_special_tokens({'pad_token': '[PAD]'})
         print("Added new pad_token: [PAD]")
 
 def preprocess(examples):
     return tokenizer(
-        examples["prompt"], 
-        truncation=True, 
-        padding="max_length", 
+        examples["prompt"],
+        truncation=True,
+        padding="max_length",
         max_length=args.max_length
     )
 
@@ -103,36 +93,92 @@ val_ds = val_ds.map(preprocess, batched=True)
 train_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 val_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
+
 # ---------------------------
-# Model with token embedding resize
+# Model
 # ---------------------------
 model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2)
 
-# Resize token embeddings if we added a new pad token
 if tokenizer.pad_token == '[PAD]':
     model.resize_token_embeddings(len(tokenizer))
     print(f"Resized token embeddings to {len(tokenizer)} tokens")
 
-model.config.id2label = {0:"no", 1:"yes"}
-model.config.label2id = {"no":0, "yes":1}
-
-# Set pad_token_id in model config to match tokenizer
+model.config.id2label = {0: "no", 1: "yes"}
+model.config.label2id = {"no": 0, "yes": 1}
 model.config.pad_token_id = tokenizer.pad_token_id
 print(f"Set model pad_token_id to: {model.config.pad_token_id}")
 
+
 # ---------------------------
-# Metrics (no confusion matrix, clean tqdm)
+# Metrics
 # ---------------------------
 def compute_metrics(pred):
     labels = pred.label_ids
     preds = np.argmax(pred.predictions, axis=1)
-
     acc = accuracy_score(labels, preds)
     prec, rec, f1, _ = precision_recall_fscore_support(labels, preds, average="binary")
-
     return {"accuracy": acc, "precision": prec, "recall": rec, "f1": f1}
 
 
+# ---------------------------
+# Improved Push-to-Hub callback
+# ---------------------------
+class PushToHubCallback(TrainerCallback):
+    def __init__(self, repo_name, push_steps):
+        self.repo_name = repo_name
+        self.push_steps = push_steps
+
+    def on_step_end(self, args, state, control, model=None, tokenizer=None, **kwargs):
+        if self.push_steps > 0 and state.global_step % self.push_steps == 0 and state.global_step > 0:
+            try:
+                print(f"🔼 Pushing model to Hub at step {state.global_step} -> {self.repo_name}")
+                
+                # Create descriptive commit message
+                commit_message = f"Training checkpoint at step {state.global_step}"
+                
+                # Push model and tokenizer with error handling
+                model.push_to_hub(
+                    self.repo_name, 
+                    commit_message=commit_message,
+                    safe_serialization=True  # Use safetensors format
+                )
+                tokenizer.push_to_hub(
+                    self.repo_name, 
+                    commit_message=commit_message
+                )
+                print(f"✅ Successfully pushed to Hub at step {state.global_step}")
+                
+            except Exception as e:
+                print(f"❌ Failed to push to Hub at step {state.global_step}: {str(e)}")
+                # Continue training even if push fails
+                pass
+
+    def on_train_end(self, args, state, control, model=None, tokenizer=None, **kwargs):
+        """Push final model at the end of training"""
+        if self.repo_name:
+            try:
+                print(f"🔼 Pushing final model to Hub: {self.repo_name}")
+                
+                commit_message = f"Final model after {state.global_step} steps"
+                
+                model.push_to_hub(
+                    self.repo_name, 
+                    commit_message=commit_message,
+                    safe_serialization=True
+                )
+                tokenizer.push_to_hub(
+                    self.repo_name, 
+                    commit_message=commit_message
+                )
+                print(f"✅ Successfully pushed final model to Hub")
+                
+            except Exception as e:
+                print(f"❌ Failed to push final model to Hub: {str(e)}")
+
+
+# ---------------------------
+# Training setup
+# ---------------------------
 training_args = TrainingArguments(
     output_dir=f"./results_{args.model_name}_{args.dataset_name}",
     eval_strategy="steps",
@@ -157,8 +203,8 @@ training_args = TrainingArguments(
     warmup_ratio=args.warmup_ratio,
     lr_scheduler_type=args.lr_scheduler_type,
     label_names=["labels"],
-    disable_tqdm=False,   # keep clean tqdm
-    log_level="error",    # stop tqdm spam
+    disable_tqdm=False,
+    log_level="error",
 )
 
 trainer = Trainer(
@@ -168,6 +214,11 @@ trainer = Trainer(
     eval_dataset=val_ds,
     compute_metrics=compute_metrics,
 )
+
+# Attach callback if hub_repo provided
+if args.hub_repo:
+    trainer.add_callback(PushToHubCallback(repo_name=args.hub_repo, push_steps=args.push_steps))
+
 
 # ---------------------------
 # Train & Evaluate
@@ -182,8 +233,12 @@ results = trainer.evaluate()
 print(f"Evaluation results on {args.dataset_name} validation set:")
 print(results)
 
-output_dir = f"./final_model_{args.model_name}_{args.dataset_name}"
+# Save final model locally
+output_dir = f"./final_model_{args.model_name.replace('/', '_')}_{args.dataset_name}"
 trainer.save_model(output_dir)
 tokenizer.save_pretrained(output_dir)
 
 print(f"Model and tokenizer saved to {output_dir}")
+
+# Note: Final push to hub is now handled by the callback's on_train_end method
+print("Training completed!")
