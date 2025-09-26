@@ -92,7 +92,7 @@ def classify_text(model, tokenizer, text, max_retries=3):
                 torch.cuda.empty_cache()
 
 
-def run_batch_inference(model, tokenizer, texts, batch_size=1):
+def run_batch_inference(model, tokenizer, texts, batch_size=8):
     """Run inference on a batch of texts. Note: Qwen3Guard processes one at a time due to chat format."""
     predictions = []
     
