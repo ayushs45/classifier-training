@@ -60,7 +60,7 @@ def map_labels(example):
 ds = ds.map(map_labels)
 
 # Split train/val (10% validation)
-dataset = ds.train_test_split(test_size=0.1, seed=42)
+dataset = ds.train_test_split(test_size=0.02, seed=42)
 train_ds, val_ds = dataset["train"], dataset["test"]
 
 print("Train size:", len(train_ds))
