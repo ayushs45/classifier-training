@@ -37,9 +37,27 @@ print(f"Loading dataset {args.dataset_name}...")
 ds = load_dataset(f"Ayush-Singh/{args.dataset_name}")['train']
 
 # ---------------------------
-# Map labels
+# Map labels - Updated for binary labels (1/0)
 # ---------------------------
-ds = ds.map(lambda ex: {"labels": 1 if ex["label"]=="yes" else 0})
+def map_labels(example):
+    """Map labels to ensure they are integers 0 or 1"""
+    label = example["label"]
+    
+    # Handle different label formats
+    if isinstance(label, str):
+        if label.lower() in ["yes", "1", "true", "positive"]:
+            return {"labels": 1}
+        elif label.lower() in ["no", "0", "false", "negative"]:
+            return {"labels": 0}
+        else:
+            raise ValueError(f"Unknown string label: {label}")
+    elif isinstance(label, (int, float)):
+        # If already numeric, ensure it's 0 or 1
+        return {"labels": int(label)}
+    else:
+        raise ValueError(f"Unknown label type: {type(label)} with value: {label}")
+
+ds = ds.map(map_labels)
 
 # Split train/val (10% validation)
 dataset = ds.train_test_split(test_size=0.1, seed=42)
@@ -47,6 +65,12 @@ train_ds, val_ds = dataset["train"], dataset["test"]
 
 print("Train size:", len(train_ds))
 print("Validation size:", len(val_ds))
+
+# Print label distribution
+train_labels = [ex["labels"] for ex in train_ds]
+val_labels = [ex["labels"] for ex in val_ds]
+print(f"Train label distribution: {np.bincount(train_labels)}")
+print(f"Validation label distribution: {np.bincount(val_labels)}")
 
 # ---------------------------
 # Tokenizer with padding token fix
