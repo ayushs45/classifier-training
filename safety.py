@@ -94,7 +94,7 @@ def map_labels(example):
 
 ds = ds.map(map_labels)
 
-dataset = ds.train_test_split(test_size=0.02, seed=42)
+dataset = ds.train_test_split(test_size=0.05, seed=42)
 train_ds, val_ds = dataset["train"], dataset["test"]
 
 print("Train size:", len(train_ds))
@@ -222,9 +222,9 @@ run_name = f"{args.model_name.replace('/', '_')}_{args.dataset_name}_run"
 training_args = TrainingArguments(
     output_dir=f"./results_{args.model_name}_{args.dataset_name}",
     eval_strategy="steps",
-    eval_steps=1500,
+    eval_steps=2000,
     save_strategy="epoch",
-    save_total_limit=5,
+    save_total_limit=200,
     learning_rate=args.learning_rate,
     per_device_train_batch_size=args.train_batch_size,
     per_device_eval_batch_size=args.eval_batch_size,
