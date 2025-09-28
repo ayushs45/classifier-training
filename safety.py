@@ -8,10 +8,13 @@ from transformers import (
     Trainer,
     TrainingArguments,
     TrainerCallback,
+    TrainerState,
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from huggingface_hub import login
 import wandb
+import os
+import json
 
 
 # ---------------------------
@@ -35,7 +38,62 @@ parser.add_argument("--hf_key", type=str, default=None, help="Hugging Face API k
 parser.add_argument("--wandb_key", type=str, default=None, help="Weights & Biases API key for logging")
 parser.add_argument("--wandb_project", type=str, default="multilingual-classification", help="WandB project name")
 
+# Resume training arguments
+parser.add_argument("--resume_from_hub", type=str, default=None,
+                   help="Hub model ID to resume from (e.g. 'username/model-name')")
+parser.add_argument("--resume_step", type=int, default=None,
+                   help="Step number to continue from (required when using --resume_from_hub)")
+
 args = parser.parse_args()
+
+# Validation (resume_step is optional)
+if args.resume_from_hub and args.resume_step is None:
+    print("⚠️  Warning: Using --resume_from_hub without --resume_step. Step count will start from 0.")
+    print("💡 Tip: Use --resume_step to continue from a specific step number")
+
+
+# ---------------------------
+# Helper Functions
+# ---------------------------
+def save_wandb_run_id(output_dir, run_id):
+    """Save wandb run ID for potential resuming"""
+    wandb_file = os.path.join(output_dir, "wandb_run_id.json")
+    os.makedirs(output_dir, exist_ok=True)
+    with open(wandb_file, 'w') as f:
+        json.dump({'run_id': run_id}, f)
+
+
+# ---------------------------
+# Custom Trainer for Step Continuation
+# ---------------------------
+class HubResumeTrainer(Trainer):
+    def __init__(self, resume_step=0, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.resume_step = resume_step
+        self._step_offset_applied = False
+        
+    def train(self, *args, **kwargs):
+        """Override train to set initial step count"""
+        if self.resume_step > 0 and not self._step_offset_applied:
+            # Initialize trainer state with resume step
+            if self.state is None:
+                self.state = TrainerState()
+            
+            self.state.global_step = self.resume_step
+            self.state.epoch = 0
+            self._step_offset_applied = True
+            
+            print(f"🔄 Training will continue from step {self.resume_step}")
+        
+        return super().train(*args, **kwargs)
+    
+    def log(self, logs):
+        """Override log to show correct step numbers"""
+        if self.resume_step > 0:
+            # Ensure step count includes the resume offset
+            if 'step' in logs:
+                logs['step'] = self.state.global_step
+        super().log(logs)
 
 
 # ---------------------------
@@ -67,6 +125,22 @@ if args.hf_key:
             print("⚠️  Warning: Hub push functionality may not work without authentication")
 elif args.hub_repo:
     print("⚠️  Warning: No HF key provided, but hub_repo specified. Hub push may fail without authentication")
+
+
+# ---------------------------
+# Determine model source and resume settings
+# ---------------------------
+if args.resume_from_hub:
+    model_source = args.resume_from_hub
+    resume_step = args.resume_step or 0
+    if resume_step > 0:
+        print(f"🔄 Resuming from Hub model: {args.resume_from_hub} at step {resume_step}")
+    else:
+        print(f"🔄 Loading Hub model: {args.resume_from_hub} (starting step count from 0)")
+else:
+    model_source = args.model_name
+    resume_step = 0
+    print(f"🆕 Starting fresh training with model: {args.model_name}")
 
 
 # ---------------------------
@@ -102,9 +176,10 @@ print("Validation size:", len(val_ds))
 
 
 # ---------------------------
-# Tokenizer
+# Tokenizer and Model
 # ---------------------------
-tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+print(f"Loading tokenizer from: {model_source}")
+tokenizer = AutoTokenizer.from_pretrained(model_source)
 
 if tokenizer.pad_token is None:
     if tokenizer.eos_token is not None:
@@ -129,11 +204,8 @@ val_ds = val_ds.map(preprocess, batched=True)
 train_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 val_ds.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
-
-# ---------------------------
-# Model
-# ---------------------------
-model = AutoModelForSequenceClassification.from_pretrained(args.model_name, num_labels=2)
+print(f"Loading model from: {model_source}")
+model = AutoModelForSequenceClassification.from_pretrained(model_source, num_labels=2)
 
 if tokenizer.pad_token == '[PAD]':
     model.resize_token_embeddings(len(tokenizer))
@@ -157,45 +229,45 @@ def compute_metrics(pred):
 
 
 # ---------------------------
-# Improved Push-to-Hub callback
+# Push-to-Hub callback with step offset
 # ---------------------------
 class PushToHubCallback(TrainerCallback):
-    def __init__(self, repo_name, push_steps):
+    def __init__(self, repo_name, push_steps, step_offset=0):
         self.repo_name = repo_name
         self.push_steps = push_steps
+        self.step_offset = step_offset
 
     def on_step_end(self, args, state, control, model=None, tokenizer=None, **kwargs):
         if self.push_steps > 0 and state.global_step % self.push_steps == 0 and state.global_step > 0:
             try:
-                print(f"🔼 Pushing model to Hub at step {state.global_step} -> {self.repo_name}")
+                actual_step = state.global_step
+                print(f"🔼 Pushing model to Hub at step {actual_step} -> {self.repo_name}")
                 
-                # Create descriptive commit message
-                commit_message = f"Training checkpoint at step {state.global_step}"
+                commit_message = f"Training checkpoint at step {actual_step}"
                 
-                # Push model and tokenizer with error handling
                 model.push_to_hub(
                     self.repo_name, 
                     commit_message=commit_message,
-                    safe_serialization=True  # Use safetensors format
+                    safe_serialization=True
                 )
                 tokenizer.push_to_hub(
                     self.repo_name, 
                     commit_message=commit_message
                 )
-                print(f"✅ Successfully pushed to Hub at step {state.global_step}")
+                print(f"✅ Successfully pushed to Hub at step {actual_step}")
                 
             except Exception as e:
                 print(f"❌ Failed to push to Hub at step {state.global_step}: {str(e)}")
-                # Continue training even if push fails
                 pass
 
     def on_train_end(self, args, state, control, model=None, tokenizer=None, **kwargs):
         """Push final model at the end of training"""
         if self.repo_name:
             try:
+                actual_step = state.global_step
                 print(f"🔼 Pushing final model to Hub: {self.repo_name}")
                 
-                commit_message = f"Final model after {state.global_step} steps"
+                commit_message = f"Final model after {actual_step} steps"
                 
                 model.push_to_hub(
                     self.repo_name, 
@@ -215,12 +287,17 @@ class PushToHubCallback(TrainerCallback):
 # ---------------------------
 # Training setup
 # ---------------------------
-# Determine report_to based on wandb authentication
 report_to = "wandb" if args.wandb_key else "none"
 run_name = f"{args.model_name.replace('/', '_')}_{args.dataset_name}_run"
 
+# Add resume info to run name
+if resume_step > 0:
+    run_name += f"_resume_{resume_step}"
+
+output_dir = f"./results_{args.model_name}_{args.dataset_name}"
+
 training_args = TrainingArguments(
-    output_dir=f"./results_{args.model_name}_{args.dataset_name}",
+    output_dir=output_dir,
     eval_strategy="steps",
     eval_steps=2000,
     save_strategy="epoch",
@@ -247,7 +324,7 @@ training_args = TrainingArguments(
     log_level="error",
 )
 
-# Initialize wandb run if key is provided
+# Initialize wandb run
 if args.wandb_key:
     wandb.init(
         project=args.wandb_project,
@@ -264,11 +341,19 @@ if args.wandb_key:
             "lr_scheduler_type": args.lr_scheduler_type,
             "max_length": args.max_length,
             "train_size": len(train_ds),
-            "val_size": len(val_ds)
+            "val_size": len(val_ds),
+            "resume_step": resume_step,
+            "resumed_from": args.resume_from_hub or "scratch"
         }
     )
+    
+    # Save wandb run ID
+    if wandb.run and wandb.run.id:
+        save_wandb_run_id(output_dir, wandb.run.id)
 
-trainer = Trainer(
+# Use custom trainer for hub resume
+trainer = HubResumeTrainer(
+    resume_step=resume_step,
     model=model,
     args=training_args,
     train_dataset=train_ds,
@@ -276,15 +361,21 @@ trainer = Trainer(
     compute_metrics=compute_metrics,
 )
 
-# Attach callback if hub_repo provided
+# Add push callback
 if args.hub_repo:
-    trainer.add_callback(PushToHubCallback(repo_name=args.hub_repo, push_steps=args.push_steps))
+    trainer.add_callback(PushToHubCallback(
+        repo_name=args.hub_repo, 
+        push_steps=args.push_steps,
+        step_offset=resume_step
+    ))
 
 
 # ---------------------------
 # Train & Evaluate
 # ---------------------------
 print("Starting training...")
+print(f"Model source: {model_source}")
+print(f"Resume step: {resume_step}")
 print(f"Tokenizer pad_token: {tokenizer.pad_token} (id: {tokenizer.pad_token_id})")
 print(f"Model pad_token_id: {model.config.pad_token_id}")
 print(f"WandB logging: {'enabled' if args.wandb_key else 'disabled'}")
@@ -295,7 +386,7 @@ results = trainer.evaluate()
 print(f"Evaluation results on {args.dataset_name} validation set:")
 print(results)
 
-# Log final results to wandb if enabled
+# Log final results to wandb
 if args.wandb_key:
     wandb.log({
         "final/eval_accuracy": results.get("eval_accuracy", 0),
@@ -305,15 +396,13 @@ if args.wandb_key:
     })
 
 # Save final model locally
-output_dir = f"./final_model_{args.model_name.replace('/', '_')}_{args.dataset_name}"
-trainer.save_model(output_dir)
-tokenizer.save_pretrained(output_dir)
+output_dir_final = f"./final_model_{args.model_name.replace('/', '_')}_{args.dataset_name}"
+trainer.save_model(output_dir_final)
+tokenizer.save_pretrained(output_dir_final)
 
-print(f"Model and tokenizer saved to {output_dir}")
+print(f"Model and tokenizer saved to {output_dir_final}")
 
-# Finish wandb run if enabled
 if args.wandb_key:
     wandb.finish()
 
-# Note: Final push to hub is now handled by the callback's on_train_end method
 print("Training completed!")
