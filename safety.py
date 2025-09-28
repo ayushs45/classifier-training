@@ -11,6 +11,7 @@ from transformers import (
 )
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 from huggingface_hub import login
+import wandb
 
 
 # ---------------------------
@@ -31,8 +32,25 @@ parser.add_argument("--max_length", type=int, default=512, help="Max sequence le
 parser.add_argument("--hub_repo", type=str, default=None, help="Hugging Face Hub repo (e.g. username/model-name)")
 parser.add_argument("--push_steps", type=int, default=0, help="Push to Hub every N steps (0 = disable)")
 parser.add_argument("--hf_key", type=str, default=None, help="Hugging Face API key for authentication")
+parser.add_argument("--wandb_key", type=str, default=None, help="Weights & Biases API key for logging")
+parser.add_argument("--wandb_project", type=str, default="multilingual-classification", help="WandB project name")
 
 args = parser.parse_args()
+
+
+# ---------------------------
+# Weights & Biases Authentication
+# ---------------------------
+if args.wandb_key:
+    try:
+        print("🔗 Logging into Weights & Biases...")
+        wandb.login(key=args.wandb_key)
+        print("✅ Successfully logged into Weights & Biases")
+    except Exception as e:
+        print(f"❌ Failed to login to Weights & Biases: {str(e)}")
+        print("⚠️  Warning: WandB logging may not work properly")
+else:
+    print("⚠️  Warning: No WandB key provided. Consider adding one for experiment tracking")
 
 
 # ---------------------------
@@ -197,6 +215,10 @@ class PushToHubCallback(TrainerCallback):
 # ---------------------------
 # Training setup
 # ---------------------------
+# Determine report_to based on wandb authentication
+report_to = "wandb" if args.wandb_key else "none"
+run_name = f"{args.model_name.replace('/', '_')}_{args.dataset_name}_run"
+
 training_args = TrainingArguments(
     output_dir=f"./results_{args.model_name}_{args.dataset_name}",
     eval_strategy="steps",
@@ -213,8 +235,8 @@ training_args = TrainingArguments(
     logging_steps=200,
     metric_for_best_model="f1",
     greater_is_better=True,
-    report_to="wandb",
-    run_name=f"{args.model_name}_{args.dataset_name}_run",
+    report_to=report_to,
+    run_name=run_name,
     remove_unused_columns=False,
     fp16=True,
     dataloader_num_workers=4,
@@ -224,6 +246,27 @@ training_args = TrainingArguments(
     disable_tqdm=False,
     log_level="error",
 )
+
+# Initialize wandb run if key is provided
+if args.wandb_key:
+    wandb.init(
+        project=args.wandb_project,
+        name=run_name,
+        config={
+            "model_name": args.model_name,
+            "dataset_name": args.dataset_name,
+            "train_batch_size": args.train_batch_size,
+            "eval_batch_size": args.eval_batch_size,
+            "learning_rate": args.learning_rate,
+            "num_epochs": args.num_epochs,
+            "weight_decay": args.weight_decay,
+            "warmup_ratio": args.warmup_ratio,
+            "lr_scheduler_type": args.lr_scheduler_type,
+            "max_length": args.max_length,
+            "train_size": len(train_ds),
+            "val_size": len(val_ds)
+        }
+    )
 
 trainer = Trainer(
     model=model,
@@ -244,6 +287,7 @@ if args.hub_repo:
 print("Starting training...")
 print(f"Tokenizer pad_token: {tokenizer.pad_token} (id: {tokenizer.pad_token_id})")
 print(f"Model pad_token_id: {model.config.pad_token_id}")
+print(f"WandB logging: {'enabled' if args.wandb_key else 'disabled'}")
 
 trainer.train()
 results = trainer.evaluate()
@@ -251,12 +295,25 @@ results = trainer.evaluate()
 print(f"Evaluation results on {args.dataset_name} validation set:")
 print(results)
 
+# Log final results to wandb if enabled
+if args.wandb_key:
+    wandb.log({
+        "final/eval_accuracy": results.get("eval_accuracy", 0),
+        "final/eval_precision": results.get("eval_precision", 0),
+        "final/eval_recall": results.get("eval_recall", 0),
+        "final/eval_f1": results.get("eval_f1", 0),
+    })
+
 # Save final model locally
 output_dir = f"./final_model_{args.model_name.replace('/', '_')}_{args.dataset_name}"
 trainer.save_model(output_dir)
 tokenizer.save_pretrained(output_dir)
 
 print(f"Model and tokenizer saved to {output_dir}")
+
+# Finish wandb run if enabled
+if args.wandb_key:
+    wandb.finish()
 
 # Note: Final push to hub is now handled by the callback's on_train_end method
 print("Training completed!")
