@@ -17,18 +17,18 @@ logger = logging.getLogger(__name__)
 # CONFIG
 # ------------------------------
 MODELS = [
+    # {
+    #     "name": "repelloai/MultilingualSafety_Research",
+    #     "subfolder": "xlm-roberta-large-v1",
+    #     "label_map": {0: "not toxic", 1: "toxic"},
+    # },
+    # {
+    #     "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
+    #     "label_map": {0: "no", 1: "yes"},
+    # },
     {
-        "name": "repelloai/MultilingualSafety_Research",
-        "subfolder": "xlm-roberta-large-v1",
-        "label_map": {0: "not toxic", 1: "toxic"},
-    },
-    {
-        "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
-        "label_map": {0: "no", 1: "yes"},
-    },
-    {
-        "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_600k",
-        "label_map": {0: "no", 1: "yes"},
+        "name": "Ayush-Singh/qwen-prompt-guard",
+        "label_map": {0: 0, 1: 1},
     },
 ]
 
