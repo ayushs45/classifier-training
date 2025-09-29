@@ -22,14 +22,14 @@ MODELS = [
     #     "subfolder": "xlm-roberta-large-v1",
     #     "label_map": {0: "not toxic", 1: "toxic"},
     # },
-    # {
-    #     "name": "Ayush-Singh/mmBert_final_model_multilingual_safety_200k",
-    #     "label_map": {0: "no", 1: "yes"},
-    # },
     {
         "name": "Ayush-Singh/qwen-prompt-guard",
-        "label_map": {0: 0, 1: 1},
+        "label_map": {0: "no", 1: "yes"},
     },
+    # {
+    #     "name": "Ayush-Singh/qwen-prompt-guard",
+    #     "label_map": {0: 0, 1: 1},
+    # },
 ]
 
 REPORT_FILE = "safety_eval_report.json"
